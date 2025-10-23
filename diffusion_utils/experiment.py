@@ -1,4 +1,6 @@
 import torch
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP
 from diffusion_utils.utils import get_args_table, clean_dict
 
 # Path
@@ -9,7 +11,7 @@ HOME = str(pathlib.Path.home())
 
 # Experiment
 from diffusion_utils import BaseExperiment
-from diffusion_utils.base import DataParallelDistribution
+from diffusion_utils.base import DataParallelDistribution, DistributedDataParallelDistribution
 
 #  Logging frameworks
 from torch.utils.tensorboard import SummaryWriter
@@ -22,8 +24,11 @@ def add_exp_args(parser):
     parser.add_argument('--epochs', type=int, default=10)
     parser.add_argument('--seed', type=int, default=0)
     parser.add_argument('--device', type=str, default='cuda')
-    parser.add_argument('--parallel', type=str, default=None, choices={'dp'})
+    parser.add_argument('--parallel', type=str, default=None, choices={'dp', 'ddp'})
     parser.add_argument('--resume', type=str, default=None)
+
+    # DDP params
+    parser.add_argument('--local_rank', type=int, default=-1, help='Local rank for distributed training')
 
     # Logging params
     parser.add_argument('--name', type=str, default=None)
@@ -46,6 +51,16 @@ class DiffusionExperiment(BaseExperiment):
                  data_id, model_id, optim_id,
                  train_loader, eval_loader,
                  model, optimizer, scheduler_iter, scheduler_epoch):
+        # DDP setup
+        self.is_ddp = args.parallel == 'ddp'
+        self.is_main_process = True  # Default for non-DDP
+
+        if self.is_ddp:
+            self.local_rank = args.local_rank
+            self.is_main_process = (self.local_rank == 0)
+            torch.cuda.set_device(self.local_rank)
+            args.device = f'cuda:{self.local_rank}'
+
         if args.log_home is None:
             self.log_base = os.path.join(HOME, 'log', 'flow')
         else:
@@ -65,6 +80,8 @@ class DiffusionExperiment(BaseExperiment):
         model = model.to(args.device)
         if args.parallel == 'dp':
             model = DataParallelDistribution(model)
+        elif args.parallel == 'ddp':
+            model = DistributedDataParallelDistribution(model, device_ids=[self.local_rank], output_device=self.local_rank)
 
         # Init parent
         super(DiffusionExperiment, self).__init__(model=model,
@@ -76,8 +93,14 @@ class DiffusionExperiment(BaseExperiment):
                                                   check_every=args.check_every)
 
         # Store args
-        self.create_folders()
-        self.save_args(args)
+        if self.is_main_process:
+            self.create_folders()
+            self.save_args(args)
+
+        # DDP barrier: wait for main process to create folders
+        if self.is_ddp:
+            dist.barrier()
+
         self.args = args
 
         # Store IDs
@@ -89,15 +112,19 @@ class DiffusionExperiment(BaseExperiment):
         self.train_loader = train_loader
         self.eval_loader = eval_loader
 
-        # Init logging
+        # Init logging (only on main process)
         args_dict = clean_dict(vars(args), keys=self.no_log_keys)
-        if args.log_tb:
-            self.writer = SummaryWriter(os.path.join(self.log_path, 'tb'))
-            self.writer.add_text("args", get_args_table(args_dict).get_html_string(), global_step=0)
-        if args.log_wandb:
-            wandb.init(config=args_dict, project=args.project, id=args.name, dir=self.log_path)
+        if self.is_main_process:
+            if args.log_tb:
+                self.writer = SummaryWriter(os.path.join(self.log_path, 'tb'))
+                self.writer.add_text("args", get_args_table(args_dict).get_html_string(), global_step=0)
+            if args.log_wandb:
+                wandb.init(config=args_dict, project=args.project, id=args.name, dir=self.log_path)
 
     def log_fn(self, epoch, train_dict, eval_dict):
+        # Only log on main process
+        if not self.is_main_process:
+            return
 
         # Tensorboard
         if self.args.log_tb:
@@ -131,4 +158,4 @@ class DiffusionExperiment(BaseExperiment):
 
     def run(self):
         if self.args.resume: self.resume()
-        super(DiffusionExperiment, self).run(epochs=self.args.epochs)
+        super(DiffusionExperiment, self).run(epochs=self.args.epochs, is_main_process=self.is_main_process)

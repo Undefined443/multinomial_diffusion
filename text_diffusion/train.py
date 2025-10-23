@@ -1,5 +1,7 @@
 import torch
+import torch.distributed as dist
 import argparse
+import os
 from diffusion_utils.utils import add_parent_path, set_seeds
 
 # Exp
@@ -26,7 +28,16 @@ add_data_args(parser)
 add_model_args(parser)
 add_optim_args(parser)
 args = parser.parse_args()
-set_seeds(args.seed)
+
+# Initialize DDP if needed
+if args.parallel == 'ddp':
+    # Get local rank from environment variable (set by torchrun)
+    args.local_rank = int(os.environ.get('LOCAL_RANK', 0))
+    dist.init_process_group(backend='nccl')
+    # Set seed for each process (different seed for each rank for data diversity)
+    set_seeds(args.seed + args.local_rank)
+else:
+    set_seeds(args.seed)
 
 ##################
 ## Specify data ##

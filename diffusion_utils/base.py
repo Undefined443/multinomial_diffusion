@@ -91,7 +91,10 @@ class BaseExperiment(object):
         with open(os.path.join(self.log_path,'args_table.txt'), "w") as f:
             f.write(str(args_table))
 
-    def save_metrics(self):
+    def save_metrics(self, is_main_process=True):
+        # Only save on main process
+        if not is_main_process:
+            return
 
         # Save metrics
         with open(os.path.join(self.log_path,'metrics_train.pickle'), 'wb') as f:
@@ -107,7 +110,11 @@ class BaseExperiment(object):
         with open(os.path.join(self.log_path,'metrics_eval.txt'), "w") as f:
             f.write(str(metric_table))
 
-    def checkpoint_save(self, name='checkpoint.pt'):
+    def checkpoint_save(self, name='checkpoint.pt', is_main_process=True):
+        # Only save on main process
+        if not is_main_process:
+            return
+
         checkpoint = {'current_epoch': self.current_epoch,
                       'train_metrics': self.train_metrics,
                       'eval_metrics': self.eval_metrics,
@@ -129,7 +136,7 @@ class BaseExperiment(object):
         if self.scheduler_iter: self.scheduler_iter.load_state_dict(checkpoint['scheduler_iter'])
         if self.scheduler_epoch: self.scheduler_epoch.load_state_dict(checkpoint['scheduler_epoch'])
 
-    def run(self, epochs):
+    def run(self, epochs, is_main_process=True):
 
         for epoch in range(self.current_epoch, epochs):
 
@@ -146,13 +153,13 @@ class BaseExperiment(object):
                 eval_dict = None
 
             # Log
-            self.save_metrics()
+            self.save_metrics(is_main_process=is_main_process)
             self.log_fn(epoch, train_dict, eval_dict)
 
             # Checkpoint
             self.current_epoch += 1
             if (epoch+1) % self.check_every == 0:
-                self.checkpoint_save()
+                self.checkpoint_save(is_main_process=is_main_process)
 
 
 class DataParallelDistribution(torch.nn.DataParallel):
@@ -163,6 +170,22 @@ class DataParallelDistribution(torch.nn.DataParallel):
 
     def log_prob(self, *args, **kwargs):
         return self.forward(*args, mode='log_prob', **kwargs)
+
+    def sample(self, *args, **kwargs):
+        return self.module.sample(*args, **kwargs)
+
+    def sample_with_log_prob(self, *args, **kwargs):
+        return self.module.sample_with_log_prob(*args, **kwargs)
+
+
+class DistributedDataParallelDistribution(torch.nn.parallel.DistributedDataParallel):
+    """
+    A DistributedDataParallel wrapper for Distribution.
+    To be used instead of nn.parallel.DistributedDataParallel for Distribution objects.
+    """
+
+    def log_prob(self, *args, **kwargs):
+        return self.module.log_prob(*args, **kwargs)
 
     def sample(self, *args, **kwargs):
         return self.module.sample(*args, **kwargs)

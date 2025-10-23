@@ -1,5 +1,6 @@
 import torch
 from torch.utils.data import DataLoader, ConcatDataset
+from torch.utils.data.distributed import DistributedSampler
 from .dataset_text8 import Text8Dataset
 from .dataset_enwik8 import EnWik8Dataset
 
@@ -24,6 +25,9 @@ def get_data_id(args):
 def get_data(args):
     assert args.dataset in dataset_choices
 
+    # Check if using DDP
+    use_ddp = hasattr(args, 'parallel') and args.parallel == 'ddp'
+
     # Dataset
     if args.dataset == 'text8_256':
         train = Text8Dataset(seq_len=256, split='train', download=True)
@@ -46,11 +50,27 @@ def get_data(args):
 
     # Data Loader
     if args.validation:
-        train_loader = DataLoader(train, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers, pin_memory=args.pin_memory)
-        eval_loader = DataLoader(valid, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers, pin_memory=args.pin_memory)
+        if use_ddp:
+            train_sampler = DistributedSampler(train, shuffle=True)
+            train_loader = DataLoader(train, batch_size=args.batch_size, sampler=train_sampler,
+                                     num_workers=args.num_workers, pin_memory=args.pin_memory)
+            eval_loader = DataLoader(valid, batch_size=args.batch_size, shuffle=False,
+                                    num_workers=args.num_workers, pin_memory=args.pin_memory)
+        else:
+            train_loader = DataLoader(train, batch_size=args.batch_size, shuffle=True,
+                                     num_workers=args.num_workers, pin_memory=args.pin_memory)
+            eval_loader = DataLoader(valid, batch_size=args.batch_size, shuffle=False,
+                                    num_workers=args.num_workers, pin_memory=args.pin_memory)
     else:
         dataset_train = ConcatDataset([train, valid])
-        train_loader = DataLoader(dataset_train, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers, pin_memory=args.pin_memory)
-        eval_loader = DataLoader(test, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers, pin_memory=args.pin_memory)
+        if use_ddp:
+            train_sampler = DistributedSampler(dataset_train, shuffle=True)
+            train_loader = DataLoader(dataset_train, batch_size=args.batch_size, sampler=train_sampler,
+                                     num_workers=args.num_workers, pin_memory=args.pin_memory)
+        else:
+            train_loader = DataLoader(dataset_train, batch_size=args.batch_size, shuffle=True,
+                                     num_workers=args.num_workers, pin_memory=args.pin_memory)
+        eval_loader = DataLoader(test, batch_size=args.batch_size, shuffle=False,
+                                num_workers=args.num_workers, pin_memory=args.pin_memory)
 
     return train_loader, eval_loader, data_shape, num_classes

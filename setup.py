@@ -8,7 +8,7 @@ setup(
     description="Experiments in PyTorch",
     long_description="",
     long_description_content_type="text/markdown",
-    packages=setuptools.find_packages(),
+    packages=find_packages(),
     classifiers=[
         "Programming Language :: Python :: 3",
         "License :: OSI Approved :: MIT License",
