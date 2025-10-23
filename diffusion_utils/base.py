@@ -192,3 +192,8 @@ class DistributedDataParallelDistribution(torch.nn.parallel.DistributedDataParal
 
     def sample_with_log_prob(self, *args, **kwargs):
         return self.module.sample_with_log_prob(*args, **kwargs)
+
+    @property
+    def Lt_history(self):
+        """Forward attribute access to the wrapped module"""
+        return self.module.Lt_history
